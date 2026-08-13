@@ -61,10 +61,49 @@ By default, the script runs in **dry-run** mode. It will only verify versions an
 python3 check_versions.py -d /path/to/your/fleet
 ```
 
+**Example Output:**
+
+```text
+[INFO] Scanning fleet directory: /path/to/your/fleet
+[INFO] Using Appco API: https://api.apps.rancher.io
+[INFO] Found 3 Appco application bundles. Verifying versions...
+-------------------------------------------------------------------------------------------------------------
+Application               Chart Name                   Local Version      Latest Appco       Status         
+-------------------------------------------------------------------------------------------------------------
+vault                     vault                        0.34.0             1.2.0-5.6          OUTDATED       
+postgresql                postgresql                   14.2.0             14.2.0             UP-TO-DATE     
+redis                     redis                        16.4.0             17.1.3-1.0         OUTDATED       
+-------------------------------------------------------------------------------------------------------------
+[INFO] 2 application(s) have new versions available.
+
+Run with the '--apply' flag to automatically update the fleet.yaml files.
+```
+
 ### 2. Automatically Apply Updates to Outdated Apps
 
 ```bash
 python3 check_versions.py -d /path/to/your/fleet --apply
+```
+
+**Example Output:**
+
+```text
+[INFO] Scanning fleet directory: /path/to/your/fleet
+[INFO] Using Appco API: https://api.apps.rancher.io
+[INFO] Found 3 Appco application bundles. Verifying versions...
+-------------------------------------------------------------------------------------------------------------
+Application               Chart Name                   Local Version      Latest Appco       Status         
+-------------------------------------------------------------------------------------------------------------
+vault                     vault                        0.34.0             1.2.0-5.6          OUTDATED       
+postgresql                postgresql                   14.2.0             14.2.0             UP-TO-DATE     
+redis                     redis                        16.4.0             17.1.3-1.0         OUTDATED       
+-------------------------------------------------------------------------------------------------------------
+[INFO] 2 application(s) have new versions available.
+
+Applying version updates...
+[SUCCESS] Updated vault to version 1.2.0-5.6 in /path/to/your/fleet/vault/fleet.yaml
+[SUCCESS] Updated redis to version 17.1.3-1.0 in /path/to/your/fleet/redis/fleet.yaml
+[SUCCESS] Successfully updated 2 application bundle(s).
 ```
 
 ### 3. Check or Apply Updates to a Single Application
