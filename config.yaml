@@ -1,0 +1,18 @@
+# appco-version-check configuration
+
+# Path to the fleet directory containing application bundles (e.g. "/path/to/cloned/lab.suse/fleet")
+# Note: Since explicit path is required, if set to null, you must pass -d or --fleet-dir via CLI.
+fleet_dir: null
+
+# Base URL for the Rancher Prime Application Collection Metadata API
+api_url: "https://api.apps.rancher.io"
+
+# List of domains/patterns used to recognize an appco application
+appco_domains:
+  - "dp.apps.rancher.io"
+
+# Default version update behavior:
+# - "auto": match existing format (if current has revision suffix, use full; otherwise use plain)
+# - "plain": use plain version numbers, e.g. "1.21.1"
+# - "full": use full version strings with revision, e.g. "1.21.1-2.1"
+version_format: "auto"
