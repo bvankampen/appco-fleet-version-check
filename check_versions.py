@@ -267,9 +267,48 @@ def surgical_update_image_tag(filepath, old_tag, new_tag):
 
 def get_chart_default_values(chart_url, chart_version, verbose=False):
     """
-    Downloads the chart's values.yaml directly from the helm chart package
-    and parses it into a dictionary.
+    Downloads the chart, parses its default values.yaml, and recursively
+    collects and merges any subcharts' default values.yaml under their subchart names.
     """
+    def load_values_recursive(chart_dir):
+        # Load this chart's values.yaml
+        values_yaml_path = os.path.join(chart_dir, "values.yaml")
+        values = {}
+        if os.path.exists(values_yaml_path):
+            try:
+                with open(values_yaml_path, 'r') as f:
+                    values = yaml.safe_load(f) or {}
+            except Exception as e:
+                log_error(f"Failed to parse values.yaml in {chart_dir}: {e}")
+                
+        # Look for subcharts inside the 'charts/' subdirectory
+        subcharts_dir = os.path.join(chart_dir, "charts")
+        if os.path.exists(subcharts_dir) and os.path.isdir(subcharts_dir):
+            try:
+                for entry in os.listdir(subcharts_dir):
+                    subchart_path = os.path.join(subcharts_dir, entry)
+                    if os.path.isdir(subchart_path):
+                        # Verify it is a valid chart folder (has Chart.yaml)
+                        if os.path.exists(os.path.join(subchart_path, "Chart.yaml")):
+                            subchart_values = load_values_recursive(subchart_path)
+                            if subchart_values:
+                                # Ensure we don't overwrite any explicit overrides the parent has
+                                if entry not in values or not isinstance(values[entry], dict):
+                                    values[entry] = subchart_values
+                                else:
+                                    # Merge subchart values with parent overrides recursively
+                                    def deep_merge(target, source):
+                                        for k, v in source.items():
+                                            if k in target and isinstance(target[k], dict) and isinstance(v, dict):
+                                                deep_merge(target[k], v)
+                                            elif k not in target:
+                                                target[k] = v
+                                    deep_merge(values[entry], subchart_values)
+            except Exception as e:
+                log_error(f"Failed to load subcharts in {subcharts_dir}: {e}")
+                
+        return values
+
     with tempfile.TemporaryDirectory() as temp_dir:
         chart_name = chart_url.split("/")[-1].split(":")[0].split("@")[0]
         pull_cmd = ["helm", "pull", chart_url, "--version", chart_version, "--untar", "-d", temp_dir]
@@ -291,13 +330,7 @@ def get_chart_default_values(chart_url, chart_version, verbose=False):
             except Exception:
                 return {}
                 
-        values_yaml_path = os.path.join(untarred_chart_path, "values.yaml")
-        if os.path.exists(values_yaml_path):
-            try:
-                with open(values_yaml_path, 'r') as f:
-                    return yaml.safe_load(f) or {}
-            except Exception as e:
-                log_error(f"Failed to parse chart's default values.yaml: {e}")
+        return load_values_recursive(untarred_chart_path)
                 
     return {}
 
@@ -723,6 +756,11 @@ def main():
         action="store_true",
         help="Enable debug logging."
     )
+    parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="Automatic yes to prompts; assume 'yes' as answer to all confirmation prompts."
+    )
     
     args = parser.parse_args()
     
@@ -1008,14 +1046,19 @@ def main():
                         val_path, tag_key = find_image_value_path(default_values, img_repo, old_tag)
                         
                         if val_path is not None and tag_key is not None:
-                            confirm_prompt = f"\n{COLOR_YELLOW}[PROMPT]{COLOR_RESET} Tag '{old_tag}' for image {COLOR_BOLD}{img_name}{COLOR_RESET} is not defined in {filepath}.\n" \
-                                             f"Heuristically found path in chart defaults: helm.values.{'.'.join(val_path)}.{tag_key}\n" \
-                                             f"Do you want to inject override `{'.'.join(val_path)}.{tag_key}: \"{new_tag}\"` into {filepath}? (y/n): "
-                            try:
-                                user_choice = input(confirm_prompt).strip().lower()
-                            except (KeyboardInterrupt, EOFError):
-                                print()
-                                continue
+                            if args.yes:
+                                user_choice = 'y'
+                            else:
+                                confirm_prompt = f"\n{COLOR_YELLOW}[PROMPT]{COLOR_RESET} Tag '{old_tag}' for image {COLOR_BOLD}{img_name}{COLOR_RESET} is not defined in {filepath}.\n" \
+                                                 f"Heuristically found path in chart defaults: helm.values.{'.'.join(val_path)}.{tag_key}\n" \
+                                                 f"Do you want to inject override `{'.'.join(val_path)}.{tag_key}: \"{new_tag}\"` into {filepath}? [Y/n]: "
+                                try:
+                                    user_choice = input(confirm_prompt).strip().lower()
+                                    if user_choice == '':
+                                        user_choice = 'y' # Default to yes
+                                except (KeyboardInterrupt, EOFError):
+                                    print()
+                                    continue
                                 
                             if user_choice == 'y':
                                 success = inject_image_tag_override(filepath, val_path, tag_key, new_tag)
