@@ -761,6 +761,11 @@ def main():
         action="store_true",
         help="Automatic yes to prompts; assume 'yes' as answer to all confirmation prompts."
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run in dry-run mode. Do not make any changes to fleet.yaml files."
+    )
     
     args = parser.parse_args()
     
@@ -995,20 +1000,27 @@ def main():
         log_info(f"{len(outdated_images)} container image(s) have new versions available.")
     
     if args.apply:
-        print("\nApplying version updates...")
-        updated_count = 0
-        for item in outdated_charts:
-            app_meta = item["app"]
-            target_v = item["target_version"]
-            
-            success = surgical_update_version(app_meta["filepath"], target_v)
-            if success:
-                log_success(f"Updated {COLOR_BOLD}{app_meta['app_name']}{COLOR_RESET} to version {COLOR_BOLD}{target_v}{COLOR_RESET} in {app_meta['filepath']}")
-                updated_count += 1
-            else:
-                log_error(f"Failed to update version in {app_meta['filepath']}")
+        if args.dry_run:
+            print("\n[DRY-RUN] Chart updates (would be applied):")
+            for item in outdated_charts:
+                app_meta = item["app"]
+                target_v = item["target_version"]
+                print(f"  - Would update {COLOR_BOLD}{app_meta['app_name']}{COLOR_RESET} to version {COLOR_BOLD}{target_v}{COLOR_RESET} in {app_meta['filepath']}")
+        else:
+            print("\nApplying version updates...")
+            updated_count = 0
+            for item in outdated_charts:
+                app_meta = item["app"]
+                target_v = item["target_version"]
                 
-        log_success(f"Successfully updated {updated_count} application bundle(s).")
+                success = surgical_update_version(app_meta["filepath"], target_v)
+                if success:
+                    log_success(f"Updated {COLOR_BOLD}{app_meta['app_name']}{COLOR_RESET} to version {COLOR_BOLD}{target_v}{COLOR_RESET} in {app_meta['filepath']}")
+                    updated_count += 1
+                else:
+                    log_error(f"Failed to update version in {app_meta['filepath']}")
+                    
+            log_success(f"Successfully updated {updated_count} application bundle(s).")
     else:
         if outdated_charts:
             print(f"\n{COLOR_YELLOW}Run with the '--apply' flag to automatically update the fleet.yaml files.{COLOR_RESET}")
@@ -1017,65 +1029,102 @@ def main():
         if not outdated_images:
             log_success("No outdated images to update.")
         else:
-            print("\nApplying image updates...")
-            updated_images_count = 0
-            for item in outdated_images:
-                filepath = item["filepath"]
-                old_tag = item["local_version"]
-                new_tag = item["target_version"]
-                img_name = item["image_short_name"]
-                image_raw = item.get("image_raw", "")
-                
-                success = surgical_update_image_tag(filepath, old_tag, new_tag)
-                if success:
-                    log_success(f"Updated image {COLOR_BOLD}{img_name}{COLOR_RESET} tag from {COLOR_BOLD}{old_tag}{COLOR_RESET} to {COLOR_BOLD}{new_tag}{COLOR_RESET} in {filepath}")
-                    updated_images_count += 1
-                else:
-                    log_debug(f"Could not find tag '{old_tag}' to update in {filepath} (likely defined in Helm chart defaults). Attempting heuristic discovery...")
+            if args.dry_run:
+                print("\n[DRY-RUN] Image overrides (would be applied/injected):")
+                for item in outdated_images:
+                    filepath = item["filepath"]
+                    old_tag = item["local_version"]
+                    new_tag = item["target_version"]
+                    img_name = item["image_short_name"]
+                    image_raw = item.get("image_raw", "")
                     
-                    # Resolve image repo (remove tag or digest)
-                    img_repo = image_raw.split("@")[0].rsplit(":", 1)[0] if image_raw else ""
-                    
-                    # Pull chart default values
-                    app_meta = item.get("app_meta", {})
-                    chart_url = app_meta.get("chart")
-                    chart_version = app_meta.get("local_version")
-                    
-                    if img_repo and chart_url and chart_version:
-                        default_values = get_chart_default_values(chart_url, chart_version, verbose=args.debug or args.verbose)
-                        val_path, tag_key = find_image_value_path(default_values, img_repo, old_tag)
+                    # Direct check if tag exists in file
+                    tag_exists = False
+                    try:
+                        with open(filepath, 'r') as f:
+                            content = f.read()
+                        if old_tag in content:
+                            tag_exists = True
+                    except Exception:
+                        pass
                         
-                        if val_path is not None and tag_key is not None:
-                            if args.yes:
-                                user_choice = 'y'
-                            else:
-                                confirm_prompt = f"\n{COLOR_YELLOW}[PROMPT]{COLOR_RESET} Tag '{old_tag}' for image {COLOR_BOLD}{img_name}{COLOR_RESET} is not defined in {filepath}.\n" \
-                                                 f"Heuristically found path in chart defaults: helm.values.{'.'.join(val_path)}.{tag_key}\n" \
-                                                 f"Do you want to inject override `{'.'.join(val_path)}.{tag_key}: \"{new_tag}\"` into {filepath}? [Y/n]: "
-                                try:
-                                    user_choice = input(confirm_prompt).strip().lower()
-                                    if user_choice == '':
-                                        user_choice = 'y' # Default to yes
-                                except (KeyboardInterrupt, EOFError):
-                                    print()
-                                    continue
-                                
-                            if user_choice == 'y':
-                                success = inject_image_tag_override(filepath, val_path, tag_key, new_tag)
-                                if success:
-                                    log_success(f"Successfully injected image override in {filepath}")
-                                    updated_images_count += 1
-                                else:
-                                    log_error(f"Failed to inject image override in {filepath}")
-                        else:
-                            log_debug(f"Heuristic path discovery failed for image '{img_repo}' with tag '{old_tag}'")
+                    if tag_exists:
+                        print(f"  - Would update image {COLOR_BOLD}{img_name}{COLOR_RESET} tag from {COLOR_BOLD}{old_tag}{COLOR_RESET} to {COLOR_BOLD}{new_tag}{COLOR_RESET} in {filepath}")
                     else:
-                        log_debug(f"Missing chart metadata or repository details for image '{img_name}'")
-            
-            if updated_images_count > 0:
-                log_success(f"Successfully updated/injected {updated_images_count} image tag(s).")
+                        img_repo = image_raw.split("@")[0].rsplit(":", 1)[0] if image_raw else ""
+                        app_meta = item.get("app_meta", {})
+                        chart_url = app_meta.get("chart")
+                        chart_version = app_meta.get("local_version")
+                        
+                        if img_repo and chart_url and chart_version:
+                            default_values = get_chart_default_values(chart_url, chart_version, verbose=args.debug or args.verbose)
+                            val_path, tag_key = find_image_value_path(default_values, img_repo, old_tag)
+                            if val_path is not None and tag_key is not None:
+                                print(f"  - Would inject override `helm.values.{'.'.join(val_path)}.{tag_key}: \"{new_tag}\"` into {filepath}")
+                            else:
+                                print(f"  - Image {COLOR_BOLD}{img_name}{COLOR_RESET} tag '{old_tag}' not overridden in file, and no heuristic override path discovered.")
+                        else:
+                            print(f"  - Image {COLOR_BOLD}{img_name}{COLOR_RESET} tag '{old_tag}' not overridden in file, and missing chart metadata.")
             else:
-                log_info("No image tags were updated or injected in fleet.yaml files.")
+                print("\nApplying image updates...")
+                updated_images_count = 0
+                for item in outdated_images:
+                    filepath = item["filepath"]
+                    old_tag = item["local_version"]
+                    new_tag = item["target_version"]
+                    img_name = item["image_short_name"]
+                    image_raw = item.get("image_raw", "")
+                    
+                    success = surgical_update_image_tag(filepath, old_tag, new_tag)
+                    if success:
+                        log_success(f"Updated image {COLOR_BOLD}{img_name}{COLOR_RESET} tag from {COLOR_BOLD}{old_tag}{COLOR_RESET} to {COLOR_BOLD}{new_tag}{COLOR_RESET} in {filepath}")
+                        updated_images_count += 1
+                    else:
+                        log_debug(f"Could not find tag '{old_tag}' to update in {filepath} (likely defined in Helm chart defaults). Attempting heuristic discovery...")
+                        
+                        # Resolve image repo (remove tag or digest)
+                        img_repo = image_raw.split("@")[0].rsplit(":", 1)[0] if image_raw else ""
+                        
+                        # Pull chart default values
+                        app_meta = item.get("app_meta", {})
+                        chart_url = app_meta.get("chart")
+                        chart_version = app_meta.get("local_version")
+                        
+                        if img_repo and chart_url and chart_version:
+                            default_values = get_chart_default_values(chart_url, chart_version, verbose=args.debug or args.verbose)
+                            val_path, tag_key = find_image_value_path(default_values, img_repo, old_tag)
+                            
+                            if val_path is not None and tag_key is not None:
+                                if args.yes:
+                                    user_choice = 'y'
+                                else:
+                                    confirm_prompt = f"\n{COLOR_YELLOW}[PROMPT]{COLOR_RESET} Tag '{old_tag}' for image {COLOR_BOLD}{img_name}{COLOR_RESET} is not defined in {filepath}.\n" \
+                                                     f"Heuristically found path in chart defaults: helm.values.{'.'.join(val_path)}.{tag_key}\n" \
+                                                     f"Do you want to inject override `{'.'.join(val_path)}.{tag_key}: \"{new_tag}\"` into {filepath}? [Y/n]: "
+                                    try:
+                                        user_choice = input(confirm_prompt).strip().lower()
+                                        if user_choice == '':
+                                            user_choice = 'y' # Default to yes
+                                    except (KeyboardInterrupt, EOFError):
+                                        print()
+                                        continue
+                                    
+                                if user_choice == 'y':
+                                    success = inject_image_tag_override(filepath, val_path, tag_key, new_tag)
+                                    if success:
+                                        log_success(f"Successfully injected image override in {filepath}")
+                                        updated_images_count += 1
+                                    else:
+                                        log_error(f"Failed to inject image override in {filepath}")
+                            else:
+                                log_debug(f"Heuristic path discovery failed for image '{img_repo}' with tag '{old_tag}'")
+                        else:
+                            log_debug(f"Missing chart metadata or repository details for image '{img_name}'")
+                
+                if updated_images_count > 0:
+                    log_success(f"Successfully updated/injected {updated_images_count} image tag(s).")
+                else:
+                    log_info("No image tags were updated or injected in fleet.yaml files.")
     else:
         if outdated_images:
             print(f"\n{COLOR_YELLOW}Run with the '--apply-images' flag to automatically update the image tags in the fleet.yaml files.{COLOR_RESET}")

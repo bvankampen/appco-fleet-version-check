@@ -152,6 +152,8 @@ python3 check_versions.py -d /path/to/your/fleet --apply --app postgresql
 - `-c`, `--config`: Path to the config file (default: `config.yaml`).
 - `--apply`: Apply version changes directly to `fleet.yaml` files.
 - `--apply-images`: Apply image tag changes directly to the `fleet.yaml` files.
+- `-y`, `--yes`: Automatic yes to prompts; assumes 'yes' to all confirmation prompts during image tag override injection.
+- `--dry-run`: Run in dry-run mode. Simulated updates will be printed, but no files will actually be modified.
 - `--app <app-name>`: Scope actions to a single application folder.
 - `--verbose`: Enable detailed request logging for debugging.
 - `--debug`: Enable detailed magenta-colored debug logging.
