@@ -73,9 +73,9 @@ python3 check_versions.py -d /path/to/your/fleet
 Application          Type       Artifact Name             Local Version      Latest Appco       Status         
 -------------------------------------------------------------------------------------------------------------
 vault                Chart      vault                     0.34.0             1.2.0-5.6          OUTDATED       
-vault                Image      vault                     1.14.0             1.14.2             OUTDATED       
+                     Image        └─ vault                1.14.0             1.14.2             OUTDATED       
 postgresql           Chart      postgresql                14.2.0             14.2.0             UP-TO-DATE     
-postgresql           Image      postgresql                14.2.0             14.2.0             UP-TO-DATE     
+                     Image        └─ postgresql           14.2.0             14.2.0             UP-TO-DATE     
 -------------------------------------------------------------------------------------------------------------
 [INFO] 1 application chart(s) have new versions available.
 [INFO] 1 container image(s) have new versions available.
