@@ -90,7 +90,27 @@ Run with the '--apply-images' flag to automatically update the image tags in the
 python3 check_versions.py -d /path/to/your/fleet --apply
 ```
 
-This will surgically update the Chart versions inside the `fleet.yaml` files.
+**Example Output:**
+
+```text
+[INFO] Scanning fleet directory: /path/to/your/fleet
+[INFO] Using Appco API: https://api.apps.rancher.io
+[INFO] Found 2 Appco application bundles. Verifying versions...
+-------------------------------------------------------------------------------------------------------------
+Application          Type       Artifact Name             Local Version      Latest Appco       Status         
+-------------------------------------------------------------------------------------------------------------
+vault                Chart      vault                     0.34.0             1.2.0-5.6          OUTDATED       
+                     Image        └─ vault                1.14.0             1.14.2             OUTDATED       
+postgresql           Chart      postgresql                14.2.0             14.2.0             UP-TO-DATE     
+                     Image        └─ postgresql           14.2.0             14.2.0             UP-TO-DATE     
+-------------------------------------------------------------------------------------------------------------
+[INFO] 1 application chart(s) have new versions available.
+[INFO] 1 container image(s) have new versions available.
+
+Applying version updates...
+[SUCCESS] Updated vault to version 1.2.0-5.6 in /path/to/your/fleet/vault/fleet.yaml
+[SUCCESS] Successfully updated 1 application bundle(s).
+```
 
 ### 3. Automatically Apply Image Tag Updates
 
@@ -98,7 +118,27 @@ This will surgically update the Chart versions inside the `fleet.yaml` files.
 python3 check_versions.py -d /path/to/your/fleet --apply-images
 ```
 
-This will update any outdated container image tags that are defined under the `helm.values` block in your `fleet.yaml` files.
+**Example Output:**
+
+```text
+[INFO] Scanning fleet directory: /path/to/your/fleet
+[INFO] Using Appco API: https://api.apps.rancher.io
+[INFO] Found 2 Appco application bundles. Verifying versions...
+-------------------------------------------------------------------------------------------------------------
+Application          Type       Artifact Name             Local Version      Latest Appco       Status         
+-------------------------------------------------------------------------------------------------------------
+vault                Chart      vault                     0.34.0             1.2.0-5.6          OUTDATED       
+                     Image        └─ vault                1.14.0             1.14.2             OUTDATED       
+postgresql           Chart      postgresql                14.2.0             14.2.0             UP-TO-DATE     
+                     Image        └─ postgresql           14.2.0             14.2.0             UP-TO-DATE     
+-------------------------------------------------------------------------------------------------------------
+[INFO] 1 application chart(s) have new versions available.
+[INFO] 1 container image(s) have new versions available.
+
+Applying image updates...
+[SUCCESS] Updated image vault tag from 1.14.0 to 1.14.2 in /path/to/your/fleet/vault/fleet.yaml
+[SUCCESS] Successfully updated 1 image tag(s).
+```
 
 ### 4. Check or Apply Updates to a Single Application
 
