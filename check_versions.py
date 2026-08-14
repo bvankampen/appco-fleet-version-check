@@ -430,15 +430,6 @@ def scan_fleet_directory(fleet_dir, appco_domains, target_app=None, verbose=Fals
             filepath = os.path.join(root, "fleet.yaml")
             log_debug(f"Scanning file: {filepath}")
             
-            # Determine application folder name relative to fleet directory
-            rel_path = os.path.relpath(root, fleet_dir)
-            app_folder_name = rel_path.split(os.sep)[0] if rel_path != "." else os.path.basename(root)
-            
-            # If target_app is specified, skip unrelated apps
-            if target_app and app_folder_name != target_app:
-                log_debug(f"Skipping {filepath}: folder name '{app_folder_name}' does not match target app '{target_app}'")
-                continue
-                
             try:
                 with open(filepath, 'r') as f:
                     data = yaml.safe_load(f) or {}
@@ -447,9 +438,26 @@ def scan_fleet_directory(fleet_dir, appco_domains, target_app=None, verbose=Fals
                 continue
                 
             helm = data.get("helm", {})
-            chart = helm.get("chart")
+            chart = helm.get("chart") or ""
             version = str(helm.get("version", "")) if helm.get("version") is not None else ""
             values = helm.get("values", {})
+            
+            # Extract the raw chart name from the registry path
+            # E.g. oci://registry.lab.suse/dp.apps.rancher.io/charts/vault -> vault
+            chart_name = chart.split("/")[-1].split(":")[0].split("@")[0] if chart else ""
+            
+            # Determine application folder name relative to fleet directory
+            rel_path = os.path.relpath(root, fleet_dir)
+            app_folder_name = rel_path.split(os.sep)[0] if rel_path != "." else os.path.basename(root)
+            
+            # If the application folder name resolved to "fleet", use the more descriptive chart name
+            if app_folder_name == "fleet" and chart_name:
+                app_folder_name = chart_name
+            
+            # If target_app is specified, skip unrelated apps
+            if target_app and app_folder_name != target_app:
+                log_debug(f"Skipping {filepath}: folder name '{app_folder_name}' does not match target app '{target_app}'")
+                continue
             
             if not chart or not version:
                 log_debug(f"Skipping {filepath}: No chart or version specified under helm:")
@@ -466,10 +474,6 @@ def scan_fleet_directory(fleet_dir, appco_domains, target_app=None, verbose=Fals
                 log_debug(f"Skipping {filepath} ({app_folder_name}): Chart '{chart}' does not match Appco domain pattern.")
                 continue
                 
-            # Extract the raw chart name from the registry path
-            # E.g. oci://registry.lab.suse/dp.apps.rancher.io/charts/vault -> vault
-            chart_name = chart.split("/")[-1].split(":")[0].split("@")[0]
-            
             log_debug(f"Found matching Appco app: {app_folder_name} (chart: {chart_name}, version: {version})")
             apps.append({
                 "app_name": app_folder_name,
