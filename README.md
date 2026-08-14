@@ -18,11 +18,9 @@ A handy command-line tool written in Python 3 to automatically scan your Rancher
 
 ## Prerequisites
 
-The script requires Python 3 with the `requests` and `PyYAML` libraries installed:
+The script requires **Python 3**. 
 
-```bash
-pip install requests pyyaml
-```
+To make running the script seamless, **all third-party Python dependencies (including `requests`, `PyYAML`, and `ruamel.yaml`) are automatically installed and managed inside a local virtual environment (`.venv`) on the first run.** You do not need to install any Python packages manually.
 
 To extract and check container images used inside Helm charts, the **Helm CLI** (`helm`) must also be installed and available in your `PATH`. If Helm is not installed, the script will gracefully skip the image checks and only verify Helm chart versions.
 

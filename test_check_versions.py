@@ -8,7 +8,7 @@ import tempfile
 import shutil
 import unittest
 from unittest.mock import patch, MagicMock
-from check_versions import parse_version_key, surgical_update_version, scan_fleet_directory, surgical_update_image_tag, get_helm_template_images
+from check_versions import parse_version_key, surgical_update_version, scan_fleet_directory, surgical_update_image_tag, get_helm_template_images, find_image_value_path, inject_image_tag_override
 
 class TestAppcoVersionChecker(unittest.TestCase):
 
@@ -176,6 +176,63 @@ spec:
                 "registry.suse.com/rancher/vault:1.14.0"
             ]
             self.assertEqual(images, expected_images)
+
+    def test_find_image_value_path(self):
+        # Create a sample values.yaml nested dict
+        values_dict = {
+            "global": {
+                "system": "test"
+            },
+            "vault": {
+                "image": {
+                    "repository": "registry.suse.com/rancher/vault",
+                    "tag": "1.14.0"
+                }
+            },
+            "other": {
+                "tag": "v1.0.0"
+            }
+        }
+        
+        # Test finding path for vault repository
+        path, tag_key = find_image_value_path(values_dict, "registry.suse.com/rancher/vault", "1.14.0")
+        self.assertEqual(path, ["vault", "image"])
+        self.assertEqual(tag_key, "tag")
+        
+        # Test not finding path for non-existent image
+        path, tag_key = find_image_value_path(values_dict, "registry.suse.com/rancher/none", "1.14.0")
+        self.assertIsNone(path)
+        self.assertIsNone(tag_key)
+
+    def test_inject_image_tag_override(self):
+        # Setup temporary file
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.yaml', delete=False) as f:
+            f.write("""defaultNamespace: test-app
+
+helm:
+  chart: oci://registry.lab.suse/dp.apps.rancher.io/charts/vault
+  version: 1.2.0
+  values:
+    someKey: test
+""")
+            temp_path = f.name
+
+        try:
+            # Perform injection of vault image tag override
+            success = inject_image_tag_override(temp_path, ["vault", "image"], "tag", "1.14.2")
+            self.assertTrue(success)
+
+            # Read file and verify structure and formatting
+            with open(temp_path, 'r') as f:
+                content = f.read()
+
+            self.assertIn("someKey: test", content)
+            self.assertIn("vault:", content)
+            self.assertIn("image:", content)
+            self.assertTrue('tag: "1.14.2"' in content or 'tag: 1.14.2' in content)
+            self.assertIn("version: 1.2.0", content)
+        finally:
+            os.remove(temp_path)
 
 if __name__ == '__main__':
     unittest.main()
