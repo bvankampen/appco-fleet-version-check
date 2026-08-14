@@ -7,7 +7,8 @@ import os
 import tempfile
 import shutil
 import unittest
-from check_versions import parse_version_key, surgical_update_version, scan_fleet_directory
+from unittest.mock import patch, MagicMock
+from check_versions import parse_version_key, surgical_update_version, scan_fleet_directory, surgical_update_image_tag, get_helm_template_images
 
 class TestAppcoVersionChecker(unittest.TestCase):
 
@@ -95,6 +96,86 @@ helm:
 
         finally:
             shutil.rmtree(temp_dir)
+
+    def test_surgical_update_image_tag(self):
+        # Create a temporary file representing a fleet.yaml with helm values
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.yaml', delete=False) as f:
+            f.write("""defaultNamespace: test-app
+
+helm:
+  chart: oci://registry.lab.suse/dp.apps.rancher.io/charts/vault
+  version: 1.2.0
+  values:
+    image:
+      repository: registry.suse.com/rancher/vault
+      tag: "1.14.0" # Keep this comment
+    global:
+      someOtherTag: 1.14.0
+""")
+            temp_path = f.name
+
+        try:
+            # Perform surgical update of image tag
+            success = surgical_update_image_tag(temp_path, "1.14.0", "1.15.2")
+            self.assertTrue(success)
+
+            # Read file back and check content
+            with open(temp_path, 'r') as f:
+                content = f.read()
+
+            self.assertIn('tag: "1.15.2" # Keep this comment', content)
+            self.assertIn('someOtherTag: 1.15.2', content)
+            self.assertIn("version: 1.2.0", content)
+            self.assertIn("defaultNamespace: test-app", content)
+        finally:
+            os.remove(temp_path)
+
+    @patch("subprocess.run")
+    def test_get_helm_template_images(self, mock_run):
+        # Mock successful responses for 'helm pull' and 'helm template'
+        mock_pull_res = MagicMock()
+        mock_pull_res.returncode = 0
+        
+        mock_template_res = MagicMock()
+        mock_template_res.returncode = 0
+        mock_template_res.stdout = """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+spec:
+  template:
+    spec:
+      containers:
+        - name: vault
+          image: registry.suse.com/rancher/vault:1.14.0
+        - name: helper
+          image: "registry.suse.com/rancher/helper-image:v1.2.3"
+      initContainers:
+        - name: init-vault
+          image: registry.suse.com/rancher/init-vault:v0.1.0@sha256:12345abcdef
+"""
+        
+        # subprocess.run is called twice: once for pull, once for template
+        mock_run.side_effect = [mock_pull_res, mock_template_res]
+        
+        # We need to mock os.path.exists and os.listdir to simulate find chart folder in temp_dir
+        with patch("os.path.exists", return_value=True), \
+             patch("os.listdir", return_value=["vault"]):
+            
+            images = get_helm_template_images(
+                "oci://registry.lab.suse/dp.apps.rancher.io/charts/vault",
+                "1.2.0",
+                {"image": {"tag": "1.14.0"}}
+            )
+            
+            # Assert exact expected images were extracted (and sorted/cleaned of digests)
+            expected_images = [
+                "registry.suse.com/rancher/helper-image:v1.2.3",
+                "registry.suse.com/rancher/init-vault:v0.1.0@sha256:12345abcdef",
+                "registry.suse.com/rancher/vault:1.14.0"
+            ]
+            self.assertEqual(images, expected_images)
 
 if __name__ == '__main__':
     unittest.main()

@@ -24,6 +24,8 @@ The script requires Python 3 with the `requests` and `PyYAML` libraries installe
 pip install requests pyyaml
 ```
 
+To extract and check container images used inside Helm charts, the **Helm CLI** (`helm`) must also be installed and available in your `PATH`. If Helm is not installed, the script will gracefully skip the image checks and only verify Helm chart versions.
+
 ---
 
 ## Configuration (`config.yaml`)
@@ -66,47 +68,39 @@ python3 check_versions.py -d /path/to/your/fleet
 ```text
 [INFO] Scanning fleet directory: /path/to/your/fleet
 [INFO] Using Appco API: https://api.apps.rancher.io
-[INFO] Found 3 Appco application bundles. Verifying versions...
+[INFO] Found 2 Appco application bundles. Verifying versions...
 -------------------------------------------------------------------------------------------------------------
-Application               Chart Name                   Local Version      Latest Appco       Status         
+Application          Type       Artifact Name             Local Version      Latest Appco       Status         
 -------------------------------------------------------------------------------------------------------------
-vault                     vault                        0.34.0             1.2.0-5.6          OUTDATED       
-postgresql                postgresql                   14.2.0             14.2.0             UP-TO-DATE     
-redis                     redis                        16.4.0             17.1.3-1.0         OUTDATED       
+vault                Chart      vault                     0.34.0             1.2.0-5.6          OUTDATED       
+vault                Image      vault                     1.14.0             1.14.2             OUTDATED       
+postgresql           Chart      postgresql                14.2.0             14.2.0             UP-TO-DATE     
+postgresql           Image      postgresql                14.2.0             14.2.0             UP-TO-DATE     
 -------------------------------------------------------------------------------------------------------------
-[INFO] 2 application(s) have new versions available.
+[INFO] 1 application chart(s) have new versions available.
+[INFO] 1 container image(s) have new versions available.
 
 Run with the '--apply' flag to automatically update the fleet.yaml files.
+Run with the '--apply-images' flag to automatically update the image tags in the fleet.yaml files.
 ```
 
-### 2. Automatically Apply Updates to Outdated Apps
+### 2. Automatically Apply Chart Updates
 
 ```bash
 python3 check_versions.py -d /path/to/your/fleet --apply
 ```
 
-**Example Output:**
+This will surgically update the Chart versions inside the `fleet.yaml` files.
 
-```text
-[INFO] Scanning fleet directory: /path/to/your/fleet
-[INFO] Using Appco API: https://api.apps.rancher.io
-[INFO] Found 3 Appco application bundles. Verifying versions...
--------------------------------------------------------------------------------------------------------------
-Application               Chart Name                   Local Version      Latest Appco       Status         
--------------------------------------------------------------------------------------------------------------
-vault                     vault                        0.34.0             1.2.0-5.6          OUTDATED       
-postgresql                postgresql                   14.2.0             14.2.0             UP-TO-DATE     
-redis                     redis                        16.4.0             17.1.3-1.0         OUTDATED       
--------------------------------------------------------------------------------------------------------------
-[INFO] 2 application(s) have new versions available.
+### 3. Automatically Apply Image Tag Updates
 
-Applying version updates...
-[SUCCESS] Updated vault to version 1.2.0-5.6 in /path/to/your/fleet/vault/fleet.yaml
-[SUCCESS] Updated redis to version 17.1.3-1.0 in /path/to/your/fleet/redis/fleet.yaml
-[SUCCESS] Successfully updated 2 application bundle(s).
+```bash
+python3 check_versions.py -d /path/to/your/fleet --apply-images
 ```
 
-### 3. Check or Apply Updates to a Single Application
+This will update any outdated container image tags that are defined under the `helm.values` block in your `fleet.yaml` files.
+
+### 4. Check or Apply Updates to a Single Application
 
 To scan or update only a single application (e.g. `postgresql`):
 
@@ -114,13 +108,15 @@ To scan or update only a single application (e.g. `postgresql`):
 python3 check_versions.py -d /path/to/your/fleet --apply --app postgresql
 ```
 
-### 4. CLI Arguments Reference
+### 5. CLI Arguments Reference
 
 - `-d`, `--fleet-dir`: Path to the fleet bundles folder.
 - `-c`, `--config`: Path to the config file (default: `config.yaml`).
 - `--apply`: Apply version changes directly to `fleet.yaml` files.
+- `--apply-images`: Apply image tag changes directly to the `fleet.yaml` files.
 - `--app <app-name>`: Scope actions to a single application folder.
 - `--verbose`: Enable detailed request logging for debugging.
+- `--debug`: Enable detailed magenta-colored debug logging.
 
 ---
 
