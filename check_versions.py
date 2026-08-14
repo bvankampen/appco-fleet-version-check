@@ -450,14 +450,9 @@ def scan_fleet_directory(fleet_dir, appco_domains, target_app=None, verbose=Fals
             rel_path = os.path.relpath(root, fleet_dir)
             app_folder_name = rel_path.split(os.sep)[0] if rel_path != "." else os.path.basename(root)
             
-            # If the application folder name resolved to "fleet", use a more descriptive name
-            if app_folder_name == "fleet":
-                parent_dir = os.path.dirname(root)
-                parent_name = os.path.basename(parent_dir)
-                if parent_name and parent_name not in ["fleet", "", "."]:
-                    app_folder_name = parent_name
-                elif chart_name:
-                    app_folder_name = chart_name
+            # If the application folder name resolved to "fleet", use the more descriptive chart name
+            if app_folder_name == "fleet" and chart_name:
+                app_folder_name = chart_name
             
             # If target_app is specified, skip unrelated apps
             if target_app and app_folder_name != target_app:
