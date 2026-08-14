@@ -5,12 +5,76 @@ Checks local Fleet application bundles against the latest versions in the Appco 
 """
 
 import os
-import re
 import sys
+import subprocess
+
+def bootstrap_dependencies():
+    """
+    Checks if required dependencies can be imported.
+    If missing, automatically creates a local virtual environment (.venv)
+    next to the script, installs dependencies, and re-executes itself.
+    """
+    required_packages = ["requests", "yaml", "ruamel.yaml"]
+    missing = False
+    for pkg in required_packages:
+        try:
+            __import__(pkg)
+        except ImportError:
+            missing = True
+            break
+            
+    if not missing:
+        return # All good!
+        
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    venv_dir = os.path.join(script_dir, ".venv")
+    is_in_venv = sys.prefix != sys.base_prefix
+    
+    if is_in_venv:
+        # If we are already in our venv but still missing dependencies, install them
+        print("Required dependencies missing inside virtual environment. Installing...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "requests", "pyyaml", "ruamel.yaml>=0.17"])
+            # Validate imports
+            for pkg in required_packages:
+                __import__(pkg)
+            return
+        except Exception as e:
+            print(f"[ERROR] Failed to install dependencies in active venv: {e}", file=sys.stderr)
+            sys.exit(1)
+            
+    # Not in venv. Create it if missing
+    if not os.path.exists(venv_dir):
+        print(f"Required dependencies missing. Creating virtual environment in {venv_dir}...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "venv", venv_dir])
+            print("Installing python dependencies (requests, pyyaml, ruamel.yaml) inside .venv...")
+            # Use venv pip to install
+            pip_exe = os.path.join(venv_dir, "bin", "pip")
+            subprocess.check_call([pip_exe, "install", "--quiet", "--upgrade", "pip"])
+            subprocess.check_call([pip_exe, "install", "--quiet", "requests", "pyyaml", "ruamel.yaml>=0.17"])
+        except Exception as e:
+            print(f"[ERROR] Failed to bootstrap virtual environment: {e}", file=sys.stderr)
+            sys.exit(1)
+            
+    # Re-execute the script using the venv python interpreter
+    venv_python = os.path.join(venv_dir, "bin", "python3")
+    if not os.path.exists(venv_python):
+        venv_python = os.path.join(venv_dir, "Scripts", "python.exe")
+        
+    if os.path.exists(venv_python):
+        os.execv(venv_python, [venv_python] + sys.argv)
+    else:
+        print("[ERROR] Virtual environment python binary not found.", file=sys.stderr)
+        sys.exit(1)
+
+# Ensure dependencies are available before importing them
+bootstrap_dependencies()
+
+import re
 import yaml
 import argparse
 import requests
-import subprocess
 import tempfile
 import shutil
 
@@ -200,6 +264,141 @@ def surgical_update_image_tag(filepath, old_tag, new_tag):
             f.writelines(new_lines)
             
     return updated
+
+def get_chart_default_values(chart_url, chart_version, verbose=False):
+    """
+    Downloads the chart's values.yaml directly from the helm chart package
+    and parses it into a dictionary.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        chart_name = chart_url.split("/")[-1].split(":")[0].split("@")[0]
+        pull_cmd = ["helm", "pull", chart_url, "--version", chart_version, "--untar", "-d", temp_dir]
+        if verbose:
+            log_debug(f"Pulling chart default values using: {' '.join(pull_cmd)}")
+            
+        try:
+            subprocess.run(pull_cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as e:
+            log_error(f"Failed to pull helm chart default values: {e.stderr}")
+            return {}
+            
+        untarred_chart_path = os.path.join(temp_dir, chart_name)
+        if not os.path.exists(untarred_chart_path):
+            try:
+                entries = os.listdir(temp_dir)
+                if entries:
+                    untarred_chart_path = os.path.join(temp_dir, entries[0])
+            except Exception:
+                return {}
+                
+        values_yaml_path = os.path.join(untarred_chart_path, "values.yaml")
+        if os.path.exists(values_yaml_path):
+            try:
+                with open(values_yaml_path, 'r') as f:
+                    return yaml.safe_load(f) or {}
+            except Exception as e:
+                log_error(f"Failed to parse chart's default values.yaml: {e}")
+                
+    return {}
+
+def find_image_value_path(values_dict, img_repo, img_tag):
+    """
+    Recursively walks values_dict to find the path (list of keys) to the tag of img_repo.
+    Returns (path_to_tag_parent_dict, tag_key_name) or (None, None).
+    E.g. (['global', 'image'], 'tag') or (['image'], 'tag')
+    """
+    img_short_name = img_repo.split("/")[-1]
+    
+    def walk(node, current_path):
+        if not isinstance(node, dict):
+            return None, None
+            
+        # Check if the current dictionary describes this image
+        has_repo = False
+        has_tag = False
+        repo_key = None
+        tag_key = None
+        
+        for k, v in node.items():
+            if isinstance(v, str):
+                # Loose matching: check if repository matches or ends with the short name
+                if k in ["repository", "image", "registry", "name"] and (v == img_repo or v.endswith(f"/{img_short_name}") or v == img_short_name):
+                    has_repo = True
+                    repo_key = k
+                # Loose matching: check if value matches tag
+                elif k in ["tag", "version"] and v == img_tag:
+                    has_tag = True
+                    tag_key = k
+                    
+        if has_repo and has_tag and tag_key:
+            return current_path, tag_key
+            
+        # Recursive search in child dictionaries
+        for k, v in node.items():
+            if isinstance(v, dict):
+                p, tk = walk(v, current_path + [k])
+                if p is not None:
+                    return p, tk
+                    
+        return None, None
+        
+    return walk(values_dict, [])
+
+def inject_image_tag_override(filepath, value_path, tag_key, new_tag):
+    """
+    Safely injects or updates a nested value override under helm: values: in fleet.yaml.
+    Preserves all existing comments, indentation, and structure of fleet.yaml.
+    """
+    try:
+        from ruamel.yaml import YAML
+    except ImportError:
+        log_error("ruamel.yaml is not installed. Unable to safely inject YAML overrides.")
+        return False
+        
+    if not os.path.exists(filepath):
+        return False
+        
+    yaml_parser = YAML()
+    yaml_parser.preserve_quotes = True
+    yaml_parser.indent(mapping=2, sequence=4, offset=2)
+    
+    try:
+        with open(filepath, 'r') as f:
+            data = yaml_parser.load(f) or {}
+    except Exception as e:
+        log_error(f"Failed to parse {filepath} with ruamel.yaml: {e}")
+        return False
+        
+    # Ensure helm: exists and is a dict
+    if "helm" not in data:
+        data["helm"] = {}
+    elif data["helm"] is None:
+        data["helm"] = {}
+        
+    # Ensure values: exists under helm:
+    if "values" not in data["helm"]:
+        data["helm"]["values"] = {}
+    elif data["helm"]["values"] is None:
+        data["helm"]["values"] = {}
+        
+    # Traverse down the heuristic value_path
+    curr = data["helm"]["values"]
+    for step in value_path:
+        if step not in curr or not isinstance(curr[step], dict):
+            curr[step] = {}
+        curr = curr[step]
+        
+    # Update the tag value
+    curr[tag_key] = new_tag
+    
+    # Write back
+    try:
+        with open(filepath, 'w') as f:
+            yaml_parser.dump(data, f)
+        return True
+    except Exception as e:
+        log_error(f"Failed to write injected updates to {filepath}: {e}")
+        return False
 
 def parse_version_key(version_str):
     """
@@ -722,7 +921,8 @@ def main():
                         "image_raw": img,
                         "image_short_name": img_short_name,
                         "local_version": img_tag,
-                        "target_version": target_img_version
+                        "target_version": target_img_version,
+                        "app_meta": app
                     })
 
     # Calculate dynamic column widths (with fallback minimums matching previous widths)
@@ -786,18 +986,53 @@ def main():
                 old_tag = item["local_version"]
                 new_tag = item["target_version"]
                 img_name = item["image_short_name"]
+                image_raw = item.get("image_raw", "")
                 
                 success = surgical_update_image_tag(filepath, old_tag, new_tag)
                 if success:
                     log_success(f"Updated image {COLOR_BOLD}{img_name}{COLOR_RESET} tag from {COLOR_BOLD}{old_tag}{COLOR_RESET} to {COLOR_BOLD}{new_tag}{COLOR_RESET} in {filepath}")
                     updated_images_count += 1
                 else:
-                    log_debug(f"Could not find tag '{old_tag}' to update in {filepath} (likely defined in Helm chart defaults).")
+                    log_debug(f"Could not find tag '{old_tag}' to update in {filepath} (likely defined in Helm chart defaults). Attempting heuristic discovery...")
+                    
+                    # Resolve image repo (remove tag or digest)
+                    img_repo = image_raw.split("@")[0].rsplit(":", 1)[0] if image_raw else ""
+                    
+                    # Pull chart default values
+                    app_meta = item.get("app_meta", {})
+                    chart_url = app_meta.get("chart")
+                    chart_version = app_meta.get("local_version")
+                    
+                    if img_repo and chart_url and chart_version:
+                        default_values = get_chart_default_values(chart_url, chart_version, verbose=args.debug or args.verbose)
+                        val_path, tag_key = find_image_value_path(default_values, img_repo, old_tag)
+                        
+                        if val_path is not None and tag_key is not None:
+                            confirm_prompt = f"\n{COLOR_YELLOW}[PROMPT]{COLOR_RESET} Tag '{old_tag}' for image {COLOR_BOLD}{img_name}{COLOR_RESET} is not defined in {filepath}.\n" \
+                                             f"Heuristically found path in chart defaults: helm.values.{'.'.join(val_path)}.{tag_key}\n" \
+                                             f"Do you want to inject override `{'.'.join(val_path)}.{tag_key}: \"{new_tag}\"` into {filepath}? (y/n): "
+                            try:
+                                user_choice = input(confirm_prompt).strip().lower()
+                            except (KeyboardInterrupt, EOFError):
+                                print()
+                                continue
+                                
+                            if user_choice == 'y':
+                                success = inject_image_tag_override(filepath, val_path, tag_key, new_tag)
+                                if success:
+                                    log_success(f"Successfully injected image override in {filepath}")
+                                    updated_images_count += 1
+                                else:
+                                    log_error(f"Failed to inject image override in {filepath}")
+                        else:
+                            log_debug(f"Heuristic path discovery failed for image '{img_repo}' with tag '{old_tag}'")
+                    else:
+                        log_debug(f"Missing chart metadata or repository details for image '{img_name}'")
             
             if updated_images_count > 0:
-                log_success(f"Successfully updated {updated_images_count} image tag(s).")
+                log_success(f"Successfully updated/injected {updated_images_count} image tag(s).")
             else:
-                log_info("No image tags were updated in fleet.yaml files (they might be managed by Helm chart defaults).")
+                log_info("No image tags were updated or injected in fleet.yaml files.")
     else:
         if outdated_images:
             print(f"\n{COLOR_YELLOW}Run with the '--apply-images' flag to automatically update the image tags in the fleet.yaml files.{COLOR_RESET}")
